@@ -58,71 +58,200 @@ span#version {
     text-decoration: none;
     }
 </style>
+
+
+
 <script>
-
-
 function generate (input) {
-	input = input.replace(/&/, '&amp;')
-	input = input.replace(/</, '&lt;')
-	var inputlines = input.split("\n")
-	var out = []
-    var actions = []
-    var resolutions = []
+	// Basic HTML escaping for safety
+	//input = input.replace(/&/g, '&amp;')
+	//input = input.replace(/</g, '&lt;')
 
-	// go through input and concatenate lines so you have one line per entry with fields tab separated
-	for (let i=0; i<inputlines.length; i++) { 
-        inputlines[i] = inputlines[i].trim()
-		inputlines[i] = inputlines[i].replace(/^<([^>]+)>/g, '<b>&lt;$1&gt;</b>')
-		inputlines[i] = inputlines[i].replace(/^([^: ]+):/g, '<b>$1:</b>')
-		inputlines[i] = inputlines[i].replace(/<b>https:<\/b>/g, 'https:')
-		inputlines[i] = inputlines[i].replace(/<b>http:<\/b>/g, 'http:')
-		inputlines[i] = inputlines[i].replace(/https:([^ ]+)/g, '<a href="https:$1">https:$1</a>')
-		inputlines[i] = inputlines[i].replace(/http:([^ ]+)/g, '<a href="http:$1">http:$1</a>')
-        if (inputlines[i] !== '') {
-            out.push(inputlines[i] + '<br/>\n')
+	// Split into lines and prepare output containers
+	const inputLines = input.split('\n')
+	const htmlLines = []			// processed transcript lines
+	const actions = []				// extracted ACTION items
+	const resolutions = []			// extracted RESOLUTION items
+
+
+    // Process substitutions
+    // Substitution command: s/old/new/ or s|old|new| (final delimiter optional)
+	for (let i = 0; i < inputLines.length; i++) {
+		let line = inputLines[i].trim()
+        const subMatch = line.match(/s([\/|])(.*?)[\/|](.*?)(?:\1)?$/)
+
+        if (subMatch) {
+            const delim = subMatch[1]			// / or |
+            const oldText = subMatch[2]
+            const newText = subMatch[3]
+
+            // console.log('%cSUBSTITUTION:', 'color: red; font-weight: bold', oldText, '→', newText)
+
+            // Search backwards through previous lines
+            for (let j = i - 1; j >= 0; j--) {
+                let prev = inputLines[j]
+
+                // If this line contains the old text, substitute and stop
+                if (prev && prev.includes(oldText)) {
+                    inputLines[j] = prev.replace(oldText, newText)
+                    break
+                    }
+                }
+
+            // Remove this substitution command line
+            inputLines[i] = ''
+            continue            
             }
-        // check for actions
-        if (inputlines[i].includes('Created ACTION-')) actions.push(inputlines[i].substr(inputlines[i].indexOf(' - ')+3))
-        if (inputlines[i].match(/^Action #\d+:/)) actions.push(inputlines[i].substr(inputlines[i].indexOf(':')+1))// scribejs
         
-        // check for resolutions
-        if (inputlines[i].includes('RESOLVED:</b>')) resolutions.push(inputlines[i].substr(inputlines[i].indexOf('RESOLVED:')+13))
-        else if (inputlines[i].includes('RESOLVED:')) resolutions.push(inputlines[i].substr(inputlines[i].indexOf('RESOLVED:')+9))
-        if (inputlines[i].includes('RESOLUTION:</b>')) resolutions.push(inputlines[i].substr(inputlines[i].indexOf('RESOLUTION:')+15))
-        else if (inputlines[i].includes('RESOLUTION:')) resolutions.push(inputlines[i].substr(inputlines[i].indexOf('RESOLUTION:')+11))
-        //console.log(inputlines[i],"resolutions:", resolutions.length)
-        if (inputlines[i].match(/^Resolution #\d+:/)) resolutions.push(inputlines[i].substr(inputlines[i].indexOf(':')+1))// scribejs
+        
+		// Neuter any markup
+		if (line.match(/</g)) // console.log('ANGLE BRACKET DETECTED HERE !')
+		inputLines[i] = line.replace(/</g, '&lt;')
         }
-    var result = 'This issue was discussed in '
-    if (document.getElementById('url').value) result += '[a meeting]('+document.getElementById('url').value+')'
-    else result += 'a meeting'
-    result += '.\n\n'
-    
-    
-    if (actions.length===0 && resolutions.length===0) result += '- No actions or resolutions\n'
-    else {
-        // list resolutions
-        if (resolutions.length>0) {
-            for (let i=0;i<resolutions.length;i++) result += '- `RESOLVED: ' + resolutions[i] + '`\n'
-            }
-        // list actions
-        if (actions.length>0) {
-            for (let i=0;i<actions.length;i++) result += '- `ACTION: ' + actions[i] + '`\n'
-            }
-        }
-    
-    
-    result += '<details><summary><i class="differentiate">View the transcript</i></summary>\n'
-    result += out.join('')
-    result += '</details>'
-    
-    return result
-}
 
 
+
+
+	// Process each line
+	for (let i = 0; i < inputLines.length; i++) {
+		let line = inputLines[i].trim()
+        // console.log('%cLINE: ' + line, 'color: red; font-weight: bold')
+        
+        if (line.match(/&lt;Zakim>/)) continue
+
+        // Detect and strip scribe name when appropriate
+        // Pattern: <xxxx>Speaker:   OR   <xxxx>   ...continuation...
+        const scribeMatch = line.match(/^&lt;([^>]+)>\s+(.*)$/)
+
+        if (scribeMatch) {
+            const scribe = scribeMatch[1]	// the xxxx inside <xxxx>
+            let rest = scribeMatch[2].trim() // text after the scribe name
+            // console.log('SCRIBE',scribe)
+            // console.log('REST',rest)
+            
+
+            // Delete lines that start with ack, q+, or q-
+            if (rest.match(/^(ack|q\+|q-|scribenick)/i)) {
+                // console.log('SKIPPING QUEUE LINE:', rest)
+                continue
+                }
+
+
+            // Case 1: Speaker name (ends with :)
+            if (rest.match(/^[^:]+:/)) { // console.log('speaker match found')
+                line = rest	// strip scribe, keep speaker
+                }
+
+            // Case 2: Continuation line (one or more dots)
+            else if (rest.match(/^\s*[.\u2026]+/)) { // console.log('continuation match found')
+                line = rest	// strip scribe, keep dots
+                }
+
+            // Otherwise leave the line unchanged (scribe name stays)
+            }
+
+
+        // console.log("PARSED LINE: ",line)
+
+
+
+
+
+
+		// Highlight speaker names like <foo>
+		line = line.replace(/^&lt;([^>]+)>/g, '<b>&lt;$1&gt;</b>')
+
+		// Highlight prefixes like "Alice:" or "RESOLVED:"
+		line = line.replace(/^([^: ]+):/g, '<b>$1:</b>')
+        if (line.match('RESOLVED')) // console.log('RESOLUTION !')
+
+		// Undo bolding of URLs
+		line = line.replace(/<b>https:<\/b>/g, 'https:')
+		line = line.replace(/<b>http:<\/b>/g, 'http:')
+
+		// Convert URLs to links
+		line = line.replace(/https:([^ ]+)/g, '<a href="https:$1">https:$1</a>')
+		line = line.replace(/http:([^ ]+)/g, '<a href="http:$1">http:$1</a>')
+
+		// Add processed line to transcript output
+		if (line !== '')
+			htmlLines.push(line + '<br/>\n')
+
+		// --- ACTION extraction ---------------------------------------------
+
+		// "Created ACTION-123 - description"
+		if (line.includes('Created ACTION-'))
+			actions.push(line.substr(line.indexOf(' - ') + 3))
+
+		// "Action #123: description" (scribejs)
+		if (line.match(/^Action #\d+:/))
+			actions.push(line.substr(line.indexOf(':') + 1))
+
+		// --- RESOLUTION extraction -----------------------------------------
+
+		// RESOLVED:
+		if (line.includes('RESOLVED:</b>'))
+			resolutions.push(line.substr(line.indexOf('RESOLVED:') + 13))
+		else if (line.includes('RESOLVED:'))
+			resolutions.push(line.substr(line.indexOf('RESOLVED:') + 9))
+
+		// RESOLUTION:
+		if (line.includes('RESOLUTION:</b>'))
+			resolutions.push(line.substr(line.indexOf('RESOLUTION:') + 15))
+		else if (line.includes('RESOLUTION:'))
+			resolutions.push(line.substr(line.indexOf('RESOLUTION:') + 11))
+
+		// "Resolution #123: description" (scribejs)
+		if (line.match(/^Resolution #\d+:/))
+			resolutions.push(line.substr(line.indexOf(':') + 1))
+	}
+
+	// --- Build summary -----------------------------------------------------
+
+	let result = 'This issue was discussed in '
+
+	const url = document.getElementById('url').value
+	if (url)
+		result += '[a meeting](' + url + ')'
+	else
+		result += 'a meeting'
+
+	result += '.\n\n'
+
+	// No actions or resolutions
+	if (actions.length === 0 && resolutions.length === 0)
+		result += '- No actions or resolutions\n'
+	else {
+		// List resolutions
+		if (resolutions.length > 0)
+			for (let i = 0; i < resolutions.length; i++)
+				result += `<p style="font-weight:bold; color: #666">- RESOLVED: ${ resolutions[i] }</p>`
+
+		// List actions
+		if (actions.length > 0)
+			for (let i = 0; i < actions.length; i++)
+				result += `<p style="font-weight:bold; color: #666">- ACTION: ${ actions[i] }</p>`
+	}
+
+	// --- Append transcript -------------------------------------------------
+
+	result += '<details><summary><i class="differentiate">View the transcript</i></summary>\n'
+	result += htmlLines.join('')
+	result += '</details>'
+
+	document.getElementById('rendered').innerHTML = result // show rendered HTML
+    document.getElementById('rendered').querySelector('details').open = true
+
+	return result
+    }
 	
 </script>
 </head>
+
+
+
+
+
 <body>
 <h1>Convert minutes to github issue comments</h1>
 
@@ -131,26 +260,26 @@ function generate (input) {
 <div style="display: flex; flex-direction: row; flex-wrap: nowrap;">
 <textarea id="in" style="flex: 1; height: 60vh;" placeholder="Copy/paste a section of the minutes here."></textarea>
 <textarea id="out" style="flex: 1; height: 60vh;" placeholder="Copy the result from here into a github issue."></textarea>
-
 </div>
 
 
 
+<div id="instructions" style="font-size: 90%; float:inline-end; colour: chocolate;">
+<p><a href="https://github.com/r12a/mins2issue/blob/gh-pages/README.md">&nbsp; How to use this</a></p>
+</div>
 
 <div id="controlPanel" style="background-color: white; width: 100%; height:2em; margin-top: .5em;">
-<button style="font-size: 100%" onclick="document.getElementById('out').value = generate(document.getElementById('in').value);document.getElementById('out').select()">Generate issue comment</button>
+<button style="font-size: 100%" onclick="document.getElementById('out').value = generate(document.getElementById('in').value);document.getElementById('out').select();">Generate issue comment</button>
 
 <input type="button" onclick="document.getElementById('in').value = ''; " value="Clear input box" />
 
 </div>
 
 
+<div id="rendered" style="margin-block-end:5em;">Rendered text for checking.</div>
 
 
 
-<div id="instructions" style="font-size: 90%; margin-top: 1em;">
-<p><a href="https://github.com/r12a/mins2issue/blob/gh-pages/README.md">&nbsp; How to use this</a></p>
-</div>
 
 
 <div class="smallprint"><span id="version">
